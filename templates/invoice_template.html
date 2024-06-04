@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <style>
+        body { font-family: Arial, sans-serif; margin: 0; padding: 0; }
+        .container { width: 90%; margin: auto; padding: 20px; border: 2px solid #000; }
+        .header { text-align: left; margin-top: 0;  margin-right:0; display: inline; padding-left: 115px ;  }
+        .header h5 {padding: 0; margin-bottom: 8px; margin-top: 0; }
+        .header p { margin: 0px 0; font-size: 14px; display: inline-block; padding: 0;}
+        .invoice {font-size:25px; padding: 0px; margin-left: 20%; display: inline-block; }
+        .invoice-details { margin-bottom: 20px; right: 60px ; display: inline-table; margin-left: 15%; margin-top: 0px;}
+        .logo { height: 100px; width: 150px; display: inline; margin-bottom: 0;}
+        .invoice-table { width: 95%; border-collapse: collapse; margin-bottom: 20px; }
+        .invoice-table th, .invoice-table td { border: 1px solid #000; padding: 8px; text-align: left; }
+        .invoice-table th { background-color: #D3D3D3; text-align: center}
+        .invoice-total { text-align: right; }
+        .invoice-total p { margin: 5px 0; }
+        .total {background-color: #E5E4E2 }
+        .bank-table th, .bank-table td { border: 1px solid #000; padding: 6px; text-align: left; }
+        .bank-table { width: 90%; border-collapse: collapse; margin-bottom: 20px; margin-right: 20px; }
+        .flex-container {display: flex; justify-content: space-between; align-items: center; background-color: #B4F1E9}
+        .left {text-align: left; display: inline-block;}
+        .center { text-align: center; margin-top: 0;padding-top: 0px; justify-content: center; align-items: center; }
+        .billing-address {width: 38%; display: inline-block;}
+        .billing-address p {margin-top: 0%; margin-bottom: 0px; padding-top: 5px; padding-bottom: 0;}
+        .billing-address strong {margin-bottom: 10px;padding-bottom: 10px; margin-top: 0;}
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div>
+            <span class="logo left">
+                <img src="{{ logo_url }}" alt="Logo" class="logo">
+            </span>
+            <span class="center">
+                <p class="invoice" ><u><strong>INVOICE</strong></u></p>
+            </span>
+            <div class="header" style="display: inline-block;">
+                <h5>HubGlobe Services Ltd.</h5>
+                <p>Unit Level 11(A), Main Office Tower,<br>
+                Financial Park Labuan, Jalan Merdeka-<br>
+                Labuan Malaysia .</p>
+                </div>
+        </div>
+        <div>
+                <span class="billing-address">
+                    <p><strong>Billing Address:</strong></p>
+                    <p>{{ billing_address.name }}<br>{{ billing_address.address }}</p>
+                </span>
+            
+            <span>
+                <table class="invoice-details">
+                    <tr>
+                        <td><strong>Invoice No.</strong></td>
+                        <td><strong>HGS-{{ billing_address.code }}-{{ invoice_date.strftime('%Y%m%d') }}</strong></td>
+                    </tr>
+                    <tr>
+                        <td>Invoice Period</td>
+                        <td>{{beginTime.strftime('%d-%b-%y')}} to {{endTime.strftime('%d-%b-%y')}} </td>
+                    </tr>
+                    <tr>
+                        <td>Invoice Date</td>
+                        <td>{{ invoice_date.strftime('%d-%b-%y') }}</td>
+                    </tr>
+                    <tr>
+                        <td>Due Date</td>
+                        <td>{{ due_date.strftime('%d-%b-%y') }}</td>
+                    </tr>
+                    <tr>
+                        <td>Time Zone</td>
+                        <td>GMT +00:00</td>
+                    </tr>
+                </table></span>
+        </div>
+        <br><br>
+        <div>
+            <table class="invoice-table">
+                <tr>
+                    <th>Description</th>
+                    <th>MOU</th>
+                    <th>Rate</th>
+                    <th>Quality</th>
+                    <th>Amount</th>
+                </tr>
+                {% for item in items %}
+                <tr>
+                    <td>{{ item.area_name }}</td>
+                    <td>{{ item.mou }}</td>
+                    <td>{{ item.rate }}</td>
+                    <td>{{ item.quality }}</td>
+                    <td>{{ item.amount }}</td>
+                </tr>
+                {% endfor %}
+                <tr class="total">
+                    <td><strong>Total</strong></td>
+                    <td><strong>{{ total_mou }}</strong></td>
+                    <td></td>
+                    <td></td>
+                    <td><strong>{{ total_amount }}</strong></td>
+                </tr>
+            </table>
+        </div>
+        <br>
+        <div>
+            <h3>Bank Information:</h3>
+        <table class="bank-table">
+            <tr>
+                <td>ACCOUNT NAME</td>
+                <td>Hubglobe Services Limited.</td>
+            </tr>
+            <tr>
+                <td>ACCOUNT NUMBER</td>
+                <td>800933187440</td>
+            </tr>
+            <tr>
+                <td>BENEFICIARY BANK NAME</td>
+                <td>CIMB BANK</td>
+            </tr>
+            <tr>
+                <td>BENEFICIARY BANK ADDRESS</td>
+                <td>CIMB BANK Malaysia Berhad, Labuan F.T. Branch</td>
+            </tr>
+            <tr>
+                <td>SWIFT ADDRESS</td>
+                <td>CIBBMYKL</td>
+            </tr>
+        </table>
+        </div>
+        <div>
+            <p style="text-align: center;"><i>Thank you for choosing HubGlobe Services Limited...</i></p>
+        </div>
+    </div>
+</body>
+</html>
