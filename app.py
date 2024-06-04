@@ -55,7 +55,7 @@ def upload_file():
             billing_address = billing_addresses.get(account_id, {'name': {account_id}, 'address': ' ', 'code' : {account_id}})
             for _, row in group.iterrows():
                 mou = row['Total duration'] / 60
-                mou = format(mou, '.2f')
+                mou = round(mou, 2)
                 rate = row['Total charges'] / mou 
                 rate = format(rate, '.4f')
                 beginTime = datetime.strptime(row['Begin time'], '%Y-%m-%d')
@@ -65,7 +65,7 @@ def upload_file():
                     'mou': mou,
                     'rate': rate,
                     'quality': row.get('quality', " "),
-                    'amount': format(row['Total charges'],'.2f')
+                    'amount': round(row['Total charges'],2)
                 })
             invoice_buffer = generate_invoice(invoice_date, due_date, account_id, items, beginTime, endTime, billing_address)
             invoices.append((f"{account_id}-{beginTime.strftime('%d-%b-%y')}_to_{endTime.strftime('%d-%b-%y')}.pdf", invoice_buffer))
@@ -82,7 +82,7 @@ def upload_file():
     return '''
     <!doctype html>
     <title>Upload Files</title>
-    <center><h1>HGS INVOICE GENERATOR</center> </h1><br><br>
+    <center><h1>HUBGLOBE BILLING</center> </h1><br><br>
     <form method=post enctype=multipart/form-data>
     <table align="center">
     <tr><td style="padding: 10px; text-align: left; font-size: 20px;"><label><strong>Enter the Invoice date: </strong></label></td>
