@@ -4,15 +4,13 @@ import pdfkit
 from io import BytesIO
 from datetime import datetime, timedelta
 import os
-import xlsxwriter
 
 app = Flask(__name__)
 
 def generate_invoice(invoice_date, due_date, account_id, items, beginTime, endTime, billing_address):
-    total_mou = round(sum(float(item['mou']) for item in items), 2)
-    total_amount = round(sum(float(item['amount']) for item in items), 2)
+    total_mou = round(sum(item['mou'] for item in items), 2)
+    total_amount = round(sum(item['amount'] for item in items), 2)
     
-    # Generate PDF
     rendered_html = render_template('invoice_template.html', 
                                     invoice_date=invoice_date, 
                                     due_date=due_date, 
@@ -25,59 +23,8 @@ def generate_invoice(invoice_date, due_date, account_id, items, beginTime, endTi
                                     billing_address=billing_address,
                                     logo_url=url_for('static', filename='logo.jpg', _external=True))
     pdf = pdfkit.from_string(rendered_html, False)
-    pdf_buffer = BytesIO(pdf)
-    
-    # Generate Excel using xlsxwriter
-    excel_buffer = BytesIO()
-    workbook = xlsxwriter.Workbook(excel_buffer, {'in_memory': True})
-    worksheet = workbook.add_worksheet()
+    return BytesIO(pdf)
 
-    # Set up formats
-    title_format = workbook.add_format({'bold': True, 'font_size': 14})
-    header_format = workbook.add_format({'bold': True, 'bg_color': '#F9DA04', 'border': 1})
-    cell_format = workbook.add_format({'border': 1})
-    currency_format = workbook.add_format({'num_format': '$#,##0.00', 'border': 1})
-    date_format = workbook.add_format({'num_format': 'yyyy-mm-dd', 'border': 1})
-
-    # Write title
-    worksheet.merge_range('A1:F1', 'Invoice', title_format)
-
-    # Write billing details
-    worksheet.write('A3', 'Invoice Date:', cell_format)
-    worksheet.write('B3', invoice_date.strftime('%Y-%m-%d'), date_format)
-    worksheet.write('A4', 'Due Date:', cell_format)
-    worksheet.write('B4', due_date.strftime('%Y-%m-%d'), date_format)
-    worksheet.write('A5', 'Account ID:', cell_format)
-    worksheet.write('B5', account_id, cell_format)
-    worksheet.write('A6', 'Billing Address:', cell_format)
-    worksheet.write('B6', f"{billing_address['name']}, {billing_address['address']}", cell_format)
-
-    # Write headers
-    headers = ['Area Name', 'Minutes of Use (MOU)', 'Rate per MOU', 'Quality', 'Amount']
-    for col_num, header in enumerate(headers):
-        worksheet.write(8, col_num, header, header_format)
-
-    # Write item rows
-    row_num = 9
-    for item in items:
-        worksheet.write(row_num, 0, item['area_name'], cell_format)
-        worksheet.write(row_num, 1, float(item['mou']), cell_format)
-        worksheet.write(row_num, 2, float(item['rate']), cell_format)
-        worksheet.write(row_num, 3, item['quality'], cell_format)
-        worksheet.write(row_num, 4, float(item['amount']), currency_format)
-        row_num += 1
-
-    # Write totals
-    worksheet.write(row_num, 3, 'Total MOU:', header_format)
-    worksheet.write(row_num, 4, total_mou, cell_format)
-    row_num += 1
-    worksheet.write(row_num, 3, 'Total Amount:', header_format)
-    worksheet.write(row_num, 4, total_amount, currency_format)
-
-    workbook.close()
-    excel_buffer.seek(0)
-    
-    return pdf_buffer, excel_buffer
 @app.route('/', methods=['GET', 'POST'])
 def upload_file():
     if request.method == 'POST':
@@ -102,56 +49,186 @@ def upload_file():
             }
 
         invoices = []
-        for account_id, group in df2.groupby('Account id'):
+        df2['Begin time'] = pd.to_datetime(df2['Begin time'])
+        df2['End time'] = pd.to_datetime(df2['End time'])
+
+        grouped = df2.groupby(['Account id', 'Begin time', 'End time'])
+        for (account_id, beginTime, endTime), group in grouped:
             items = []
-            billing_address = billing_addresses.get(account_id, {'name': {account_id}, 'address': ' ', 'code' : {account_id}})
+            billing_address = billing_addresses.get(account_id, {'name': {account_id}, 'address': ' ', 'code': {account_id}})
             for _, row in group.iterrows():
                 mou = row['Total duration'] / 60
-                mou = format(mou, '.2f')
-                rate = row['Total charges'] / float(mou)
+                mou = round(mou, 2)
+                rate = row['Total charges'] / mou 
                 rate = format(rate, '.4f')
-                beginTime = datetime.strptime(row['Begin time'], '%Y-%m-%d')
-                endTime = datetime.strptime(row['End time'], '%Y-%m-%d')
                 items.append({
                     'area_name': row['Area name'],
                     'mou': mou,
                     'rate': rate,
                     'quality': row.get('quality', " "),
-                    'amount': format(row['Total charges'], '.2f')
+                    'amount': round(row['Total charges'], 2)
                 })
-            pdf_buffer, excel_buffer = generate_invoice(invoice_date, due_date, account_id, items, beginTime, endTime, billing_address)
-            pdf_filename = f"{account_id}-{beginTime.strftime('%d-%b-%y')}_to_{endTime.strftime('%d-%b-%y')}.pdf"
-            excel_filename = f"{account_id}-{beginTime.strftime('%d-%b-%y')}_to_{endTime.strftime('%d-%b-%y')}.xlsx"
-            invoices.append((pdf_filename, pdf_buffer, excel_filename, excel_buffer))
+            invoice_buffer = generate_invoice(invoice_date, due_date, account_id, items, beginTime, endTime, billing_address)
+            invoices.append((f"{account_id}-{beginTime.strftime('%d-%b-%y')}_to_{endTime.strftime('%d-%b-%y')}.pdf", invoice_buffer))
         
         response_html = "<h1>Invoices Generated:</h1><ul>"
-        for pdf_filename, pdf_buffer, excel_filename, excel_buffer in invoices:
-            pdf_path = os.path.join('invoices', pdf_filename)
-            with open(pdf_path, 'wb') as f:
-                f.write(pdf_buffer.getbuffer())
-            excel_path = os.path.join('invoices', excel_filename)
-            with open(excel_path, 'wb') as f:
-                f.write(excel_buffer.getbuffer())
-            response_html += f'<li>PDF: <a href="/download/{pdf_filename}" target="_blank">{pdf_filename}</a> | Excel: <a href="/download/{excel_filename}" target="_blank">{excel_filename}</a></li>'
+        for filename, buffer in invoices:
+            with open(os.path.join('invoices', filename), 'wb') as f:
+                f.write(buffer.getbuffer())
+            response_html += f'<li><a href="/download/{filename}" target="_blank">{filename}</a></li>'
         response_html += "</ul>"
 
         return response_html
 
     return '''
     <!doctype html>
-    <title>Upload Files</title>
-    <center><h1>HGS INVOICE GENERATOR</center> </h1><br><br>
-    <form method=post enctype=multipart/form-data>
-    <table align="center">
-    <tr><td style="padding: 10px; text-align: left; font-size: 20px;"><label><strong>Enter the Invoice date: </strong></label></td>
-      <td style="padding: 10px; text-align: left"><input type="date" name="invoice_date" required></td></tr>
-      <tr><td style="padding: 10px; font-size: 20px;"><label><strong>Upload Customer Detail Excel: </strong></label></td>
-      <td style="padding: 10px; text-align: left"><input type="file" name="excel1" required></td></tr>
-      <tr><td style="padding: 10px; font-size: 20px;"><label><strong>Upload latest Traffic Excel: </strong></label></td>
-      <td style="padding: 10px; "><input type="file" name="excel2" required></td></tr>
-      <tr><td style="padding: 10px;"><input type="submit" value="Upload"></td></tr>
-      </table>
-    </form>
+    <html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Billing HGS</title>
+        <style>
+            @import url('https://fonts.googleapis.com/css2?family=Roboto:wght@400;700&display=swap');
+
+            body {
+                font-family: 'Roboto', sans-serif;
+                background-color: #f0f2f5;
+                color: #333;
+                margin: 0;
+                display: flex;
+                justify-content: center;
+                align-items: center;
+                height: 100vh;
+            }
+            .container {
+                background: white;
+                padding: 30px;
+                box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+                border-radius: 10px;
+                width: 100%;
+                max-width: 600px;
+                text-align: center;
+            }
+            .header {
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                margin-bottom: 20px;
+            }
+            .header img {
+                width: 50px;
+                margin-right: 15px;
+            }
+            .header h1 {
+                font-size: 28px;
+                margin: 0;
+                color: #007BFF;
+            }
+            form {
+                margin-top: 20px;
+            }
+            table {
+                margin: 0 auto;
+                font-size: 16px;
+                width: 100%;
+            }
+            td {
+                padding: 10px;
+                text-align: left;
+            }
+            input[type="submit"] {
+                background-color: #007BFF;
+                color: white;
+                border: none;
+                padding: 10px 20px;
+                font-size: 16px;
+                cursor: pointer;
+                border-radius: 5px;
+                transition: background-color 0.3s ease;
+            }
+            input[type="submit"]:hover {
+                background-color: #0056b3;
+            }
+            input[type="date"], input[type="file"] {
+                padding: 10px;
+                font-size: 16px;
+                border: 1px solid #ccc;
+                border-radius: 5px;
+                width: calc(100% - 22px);
+                margin: 5px 0 20px 0;
+                background-color: #e6f7ff;
+            }
+            .input-container {
+                margin-bottom: 20px;
+                text-align: left;
+            }
+            .input-container label {
+                display: block;
+                margin-bottom: 8px;
+                font-weight: bold;
+                font-size: 16px;
+            }
+            .custom-file-input {
+                position: relative;
+                display: inline-block;
+                width: calc(100% - 22px);
+                margin: 5px 0 20px 0;
+            }
+            .custom-file-input input[type="file"] {
+                position: absolute;
+                opacity: 0;
+                width: 100%;
+                height: 100%;
+                cursor: pointer;
+            }
+            .custom-file-input label {
+                background-color: #007BFF;
+                color: white;
+                border: none;
+                padding: 10px 20px;
+                font-size: 16px;
+                cursor: pointer;
+                border-radius: 5px;
+                transition: background-color 0.3s ease;
+            }
+
+            .custom-file-input label:hover {
+                background-color: #0056b3;
+            }
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <div class="header">
+                <img src="static/logo.jpg" alt="Logo">
+                <h1>BILLING HUBGLOBE</h1>
+            </div>
+            <form method="post" enctype="multipart/form-data">
+                <div class="input-container">
+                    <label for="invoice_date"><strong>Enter the Invoice date:</strong></label>
+                    <input type="date" name="invoice_date" id="invoice_date" required>
+                </div>
+                <div class="input-container custom-file-input">
+                    <label for="excel1" id="label-excel1"><strong>Upload Customer Detail Excel:</strong></label>
+                    <input type="file" name="excel1" id="excel1" required onchange="updateFileName('excel1')">
+                </div>
+                <div class="input-container custom-file-input">
+                    <label for="excel2" id="label-excel2"><strong>Upload latest Traffic Excel:</strong></label>
+                    <input type="file" name="excel2" id="excel2" required onchange="updateFileName('excel2')">
+                </div>
+                <input type="submit" value="Upload">
+            </form>
+        </div>
+        <script>
+            function updateFileName(inputId) {
+                const input = document.getElementById(inputId);
+                const label = document.getElementById('label-' + inputId);
+                const fileName = input.files[0].name;
+                label.innerHTML = `<strong>${fileName}</strong>`;
+            }
+        </script>
+    </body>
+    </html>
     '''
 
 @app.route('/download/<filename>', methods=['GET'])
