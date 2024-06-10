@@ -70,14 +70,16 @@ def upload_file():
             for _, row in group.iterrows():
                 mou = row['Total duration'] / 60
                 mou = round(mou, 2)
-                rate = row['Total charges'] / mou 
+                rate_string = row['Total charges']
+                rate = float(rate_string.replace(",", ""))
+                rate = rate/mou
                 rate = format(rate, '.4f')
                 items.append({
                     'area_name': row['Area name'],
                     'mou': mou,
                     'rate': rate,
                     'quality': row.get('quality', " "),
-                    'amount': round(row['Total charges'], 2)
+                    'amount': round(float(row['Total charges'].replace(",","")), 2)
                 })
             invoice_buffer = generate_invoice(invoice_date, due_date, account_id, items, beginTime, endTime, billing_address)
             invoices.append((f"{account_id}-{beginTime.strftime('%d-%b-%y')}_to_{endTime.strftime('%d-%b-%y')}.pdf", invoice_buffer))
