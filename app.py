@@ -38,14 +38,13 @@ def upload_file():
         df1 = pd.read_excel(excel1)
         df2 = pd.read_excel(excel2)
 
-        # Create a dictionary for billing addresses
         billing_addresses = {}
-        missing_account_ids = []  # List to track missing account IDs
-        missing_company_names = []  # List to track missing company names
+        missing_account_ids = [] 
+        missing_company_names = [] 
         
         for _, row in df1.iterrows():
             account_id = row['account_id']
-            if pd.isnull(row['Company Name']):  # Check if company name is missing
+            if pd.isnull(row['Company Name']):
                 missing_company_names.append(account_id)
                 continue
             
@@ -61,7 +60,7 @@ def upload_file():
 
         grouped = df2.groupby(['Account id', 'Begin time', 'End time'])
         for (account_id, beginTime, endTime), group in grouped:
-            if account_id not in billing_addresses:  # Check if account ID is missing
+            if account_id not in billing_addresses:
                 missing_account_ids.append(account_id)
                 continue
             
@@ -71,15 +70,16 @@ def upload_file():
                 mou = row['Total duration'] / 60
                 mou = round(mou, 2)
                 rate_string = row['Total charges']
-                rate = float(rate_string.replace(",", ""))
-                rate = rate/mou
+                if isinstance(rate_string, str):
+                    rate_string = rate_string.replace(",", "")
+                rate = float(rate_string) / mou
                 rate = format(rate, '.4f')
                 items.append({
                     'area_name': row['Area name'],
                     'mou': mou,
                     'rate': rate,
                     'quality': row.get('quality', " "),
-                    'amount': round(float(row['Total charges'].replace(",","")), 2)
+                    'amount': round(float(rate_string), 2)
                 })
             invoice_buffer = generate_invoice(invoice_date, due_date, account_id, items, beginTime, endTime, billing_address)
             invoices.append((f"{account_id}-{beginTime.strftime('%d-%b-%y')}_to_{endTime.strftime('%d-%b-%y')}.pdf", invoice_buffer))
@@ -97,7 +97,7 @@ def upload_file():
                 response_html += f"<li>{account_id}</li>"
             response_html += "</ul>"
 
-        # if missing_company_names:  # Conditional block for missing company names
+        # if missing_company_names:
         #     response_html += "<h2>Missing Company Names:</h2><ul>"
         #     for account_id in missing_company_names:
         #         response_html += f"<li>{account_id}</li>"
@@ -149,7 +149,7 @@ def upload_file():
             box-sizing: border-box;
         }
         input[type="file"] {
-            background-color: #f8f9fa; /* Light grey */
+            background-color: #f8f9fa;
         }
         input[type="submit"] {
             background-color: #007bff;
@@ -184,7 +184,6 @@ def upload_file():
     </div>
 </body>
 </html>
-
     '''
 
 @app.route('/download/<filename>', methods=['GET'])
