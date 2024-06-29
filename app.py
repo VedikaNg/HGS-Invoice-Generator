@@ -7,21 +7,39 @@ import os
 
 app = Flask(__name__)
 
-def generate_invoice(invoice_date, due_date, account_id, items, beginTime, endTime, billing_address):
-    total_mou = round(sum(item['mou'] for item in items), 2)
-    total_amount = round(sum(item['amount'] for item in items), 2)
-    
-    rendered_html = render_template('invoice_template.html', 
-                                    invoice_date=invoice_date, 
-                                    due_date=due_date, 
-                                    account_id=account_id, 
-                                    beginTime=beginTime,
-                                    endTime=endTime,
-                                    items=items,
-                                    total_mou=total_mou,
-                                    total_amount=total_amount,
-                                    billing_address=billing_address,
-                                    logo_url=url_for('static', filename='logo.jpg', _external=True))
+def generate_invoice(invoice_date, due_date, account_id, items, beginTime, endTime, billing_address, address_type):
+    total_amount = int(round(sum(item['amount'] for item in items)))
+
+    if address_type == 'Malaysia':
+        total_mou = int(round(sum(item['mou'] for item in items)))
+        template = 'invoice_template_malaysia.html'
+        context = {
+            'invoice_date': invoice_date,
+            'due_date': due_date,
+            'account_id': account_id,
+            'beginTime': beginTime,
+            'endTime': endTime,
+            'items': items,
+            'total_mou': total_mou,
+            'total_amount': total_amount,
+            'billing_address': billing_address,
+            'logo_url': url_for('static', filename='logo.jpg', _external=True)
+        }
+    else:
+        template = 'invoice_template_usa.html'
+        context = {
+            'invoice_date': invoice_date,
+            'due_date': due_date,
+            'account_id': account_id,
+            'beginTime': beginTime,
+            'endTime': endTime,
+            'items': items,
+            'total_amount': total_amount,
+            'billing_address': billing_address,
+            'logo_url': url_for('static', filename='logo.jpg', _external=True)
+        }
+
+    rendered_html = render_template(template, **context)
     pdf = pdfkit.from_string(rendered_html, False)
     return BytesIO(pdf)
 
@@ -30,7 +48,7 @@ def upload_file():
     if request.method == 'POST':
         invoice_date_str = request.form['invoice_date']
         invoice_date = datetime.strptime(invoice_date_str, '%Y-%m-%d')
-        due_date = invoice_date + timedelta(days=7)
+        address_type = request.form['address_type']
         
         excel1 = request.files['excel1']
         excel2 = request.files['excel2']
@@ -66,22 +84,37 @@ def upload_file():
             
             items = []
             billing_address = billing_addresses[account_id]
+            
+            date_diff = (endTime - beginTime).days
+            due_date = invoice_date + timedelta(days=15 if date_diff > 10 else 7)
+            
             for _, row in group.iterrows():
-                mou = row['Total duration'] / 60
-                mou = round(mou, 2)
-                rate_string = row['Total charges']
-                if isinstance(rate_string, str):
-                    rate_string = rate_string.replace(",", "")
-                rate = float(rate_string) / mou
-                rate = format(rate, '.4f')
-                items.append({
-                    'area_name': row['Area name'],
-                    'mou': mou,
-                    'rate': rate,
-                    'quality': row.get('quality', " "),
-                    'amount': round(float(rate_string), 2)
-                })
-            invoice_buffer = generate_invoice(invoice_date, due_date, account_id, items, beginTime, endTime, billing_address)
+                if address_type == 'Malaysia':
+                    mou = row['Total duration'] / 60
+                    mou = round(mou, 2)
+                    rate_string = row['Total charges']
+                    if isinstance(rate_string, str):
+                        rate_string = rate_string.replace(",", "")
+                    rate = float(rate_string) / mou
+                    rate = format(rate, '.4f')
+                
+                    item = {
+                        'area_name': row['Area name'],
+                        'mou': mou,
+                        'rate': rate,
+                        'quality': row.get('quality', " "),
+                        'amount': round(float(rate_string), 2)
+                    }
+                if address_type == 'USA':
+                    rate_string = row['Total charges']
+                    if isinstance(rate_string, str):
+                        rate_string = rate_string.replace(",", "")
+                    item = {
+                        'area_name': row['Area name'],
+                        'amount': round(float(rate_string), 2)
+                    }
+                items.append(item)
+            invoice_buffer = generate_invoice(invoice_date, due_date, account_id, items, beginTime, endTime, billing_address, address_type)
             invoices.append((f"{account_id}-{beginTime.strftime('%d-%b-%y')}_to_{endTime.strftime('%d-%b-%y')}.pdf", invoice_buffer))
         
         response_html = "<h1>Invoices Generated:</h1><ul>"
@@ -97,15 +130,8 @@ def upload_file():
                 response_html += f"<li>{account_id}</li>"
             response_html += "</ul>"
 
-        # if missing_company_names:
-        #     response_html += "<h2>Missing Company Names:</h2><ul>"
-        #     for account_id in missing_company_names:
-        #         response_html += f"<li>{account_id}</li>"
-        #     response_html += "</ul>"
-
         return response_html
 
-  
     return '''
 <!DOCTYPE html>
 <html lang="en">
@@ -140,7 +166,8 @@ def upload_file():
             color: #555;
         }
         input[type="date"],
-        input[type="file"] {
+        input[type="file"],
+        select {
             width: 100%;
             padding: 10px;
             margin-bottom: 20px;
@@ -179,6 +206,12 @@ def upload_file():
             <label for="excel2">Upload latest Traffic Excel:</label>
             <input type="file" id="excel2" name="excel2" required>
             
+            <label for="address_type">Select Address Type:</label>
+            <select id="address_type" name="address_type" required>
+                <option value="Malaysia">Malaysia</option>
+                <option value="USA">USA</option>
+            </select>
+
             <input type="submit" value="Submit">
         </form>
     </div>

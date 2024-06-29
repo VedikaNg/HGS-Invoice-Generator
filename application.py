@@ -7,22 +7,70 @@ import os
 
 app = Flask(__name__)
 
-def generate_invoice(invoice_date, due_date, account_id, items, beginTime, endTime, billing_address):
-    total_mou = round(sum(item['mou'] for item in items), 2)
-    total_amount = round(sum(item['amount'] for item in items), 2)
+def log_invoice_details(address_type, invoice_number, account_id, total_amount, beginTime, endTime, invoice_date, total_mou=None):
+    filename = f'billing_log_{address_type.lower()}.xlsx'
     
-    rendered_html = render_template('invoice_template.html', 
-                                    invoice_date=invoice_date, 
-                                    due_date=due_date, 
-                                    account_id=account_id, 
-                                    beginTime=beginTime,
-                                    endTime=endTime,
-                                    items=items,
-                                    total_mou=total_mou,
-                                    total_amount=total_amount,
-                                    billing_address=billing_address,
-                                    logo_url=url_for('static', filename='logo.jpg', _external=True))
+    new_data = {
+        'Invoice Number': [invoice_number],
+        'Invoice Date': [invoice_date],
+        'Begin Time': [beginTime],
+        'End Time': [endTime],
+        'Account ID': [account_id],
+        'Total Amount': [total_amount]
+    }
+
+    if address_type == 'Malaysia':
+        new_data['Total MOU'] = [total_mou]
+
+    new_df = pd.DataFrame(new_data)
+
+    if os.path.exists(filename):
+        existing_df = pd.read_excel(filename)
+        updated_df = pd.concat([existing_df, new_df], ignore_index=True)
+    else:
+        updated_df = new_df
+
+    updated_df.to_excel(filename, index=False)
+
+def generate_invoice(invoice_date, due_date, account_id, items, beginTime, endTime, billing_address, address_type):
+    total_amount = int(round(sum(item['amount'] for item in items)))
+    invoice_number = f"HGS-{billing_address['code']}-{invoice_date.strftime('%Y%m%d')}"
+
+    if address_type == 'Malaysia':
+        total_mou = int(round(sum(item['mou'] for item in items)))
+        template = 'invoice_template_malaysia.html'
+        context = {
+            'invoice_date': invoice_date,
+            'due_date': due_date,
+            'account_id': account_id,
+            'beginTime': beginTime,
+            'endTime': endTime,
+            'items': items,
+            'total_mou': total_mou,
+            'total_amount': total_amount,
+            'billing_address': billing_address,
+            'logo_url': url_for('static', filename='logo.jpg', _external=True)
+        }
+    else:
+        total_mou = None
+        template = 'invoice_template_usa.html'
+        context = {
+            'invoice_date': invoice_date,
+            'due_date': due_date,
+            'account_id': account_id,
+            'beginTime': beginTime,
+            'endTime': endTime,
+            'items': items,
+            'total_amount': total_amount,
+            'billing_address': billing_address,
+            'logo_url': url_for('static', filename='logo.jpg', _external=True)
+        }
+
+    rendered_html = render_template(template, **context)
     pdf = pdfkit.from_string(rendered_html, False)
+
+    log_invoice_details(address_type, invoice_number, account_id, total_amount, beginTime, endTime, invoice_date, total_mou)
+
     return BytesIO(pdf)
 
 @app.route('/', methods=['GET', 'POST'])
@@ -30,7 +78,7 @@ def upload_file():
     if request.method == 'POST':
         invoice_date_str = request.form['invoice_date']
         invoice_date = datetime.strptime(invoice_date_str, '%Y-%m-%d')
-        due_date = invoice_date + timedelta(days=7)
+        address_type = request.form['address_type']
         
         excel1 = request.files['excel1']
         excel2 = request.files['excel2']
@@ -38,10 +86,16 @@ def upload_file():
         df1 = pd.read_excel(excel1)
         df2 = pd.read_excel(excel2)
 
-        # Create a dictionary for billing addresses
         billing_addresses = {}
+        missing_account_ids = [] 
+        missing_company_names = [] 
+        
         for _, row in df1.iterrows():
             account_id = row['account_id']
+            if pd.isnull(row['Company Name']):
+                missing_company_names.append(account_id)
+                continue
+            
             billing_addresses[account_id] = {
                 'name': row['Company Name'],
                 'address': row['Company Address'],
@@ -54,21 +108,43 @@ def upload_file():
 
         grouped = df2.groupby(['Account id', 'Begin time', 'End time'])
         for (account_id, beginTime, endTime), group in grouped:
+            if account_id not in billing_addresses:
+                missing_account_ids.append(account_id)
+                continue
+            
             items = []
-            billing_address = billing_addresses.get(account_id, {'name': {account_id}, 'address': ' ', 'code': {account_id}})
+            billing_address = billing_addresses[account_id]
+            
+            date_diff = (endTime - beginTime).days
+            due_date = invoice_date + timedelta(days=15 if date_diff > 10 else 7)
+            
             for _, row in group.iterrows():
-                mou = row['Total duration'] / 60
-                mou = round(mou, 2)
-                rate = row['Total charges'] / mou 
-                rate = format(rate, '.4f')
-                items.append({
-                    'area_name': row['Area name'],
-                    'mou': mou,
-                    'rate': rate,
-                    'quality': row.get('quality', " "),
-                    'amount': round(row['Total charges'], 2)
-                })
-            invoice_buffer = generate_invoice(invoice_date, due_date, account_id, items, beginTime, endTime, billing_address)
+                if address_type == 'Malaysia':
+                    mou = row['Total duration'] / 60
+                    mou = round(mou, 2)
+                    rate_string = row['Total charges']
+                    if isinstance(rate_string, str):
+                        rate_string = rate_string.replace(",", "")
+                    rate = float(rate_string) / mou
+                    rate = format(rate, '.4f')
+                
+                    item = {
+                        'area_name': row['Area name'],
+                        'mou': mou,
+                        'rate': rate,
+                        'quality': row.get('quality', " "),
+                        'amount': round(float(rate_string), 2)
+                    }
+                if address_type == 'USA':
+                    rate_string = row['Total charges']
+                    if isinstance(rate_string, str):
+                        rate_string = rate_string.replace(",", "")
+                    item = {
+                        'area_name': row['Area name'],
+                        'amount': round(float(rate_string), 2)
+                    }
+                items.append(item)
+            invoice_buffer = generate_invoice(invoice_date, due_date, account_id, items, beginTime, endTime, billing_address, address_type)
             invoices.append((f"{account_id}-{beginTime.strftime('%d-%b-%y')}_to_{endTime.strftime('%d-%b-%y')}.pdf", invoice_buffer))
         
         response_html = "<h1>Invoices Generated:</h1><ul>"
@@ -78,157 +154,99 @@ def upload_file():
             response_html += f'<li><a href="/download/{filename}" target="_blank">{filename}</a></li>'
         response_html += "</ul>"
 
+        if missing_account_ids:
+            response_html += "<h2>Missing Account IDs:</h2><ul>"
+            for account_id in missing_account_ids:
+                response_html += f"<li>{account_id}</li>"
+            response_html += "</ul>"
+
         return response_html
 
     return '''
-    <!doctype html>
-    <html lang="en">
-    <head>
-        <meta charset="UTF-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>Billing HGS</title>
-        <style>
-            @import url('https://fonts.googleapis.com/css2?family=Roboto:wght@400;700&display=swap');
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Billing HGS</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background-color: #f0f0f0;
+            margin: 0;
+            padding: 0;
+        }
+        .container {
+            max-width: 600px;
+            margin: 50px auto;
+            background-color: #fff;
+            padding: 30px;
+            border-radius: 8px;
+            box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
+        }
+        h1 {
+            text-align: center;
+            margin-bottom: 30px;
+            color: #007bff;
+        }
+        label {
+            font-weight: bold;
+            display: block;
+            margin-bottom: 10px;
+            color: #555;
+        }
+        input[type="date"],
+        input[type="file"],
+        select {
+            width: 100%;
+            padding: 10px;
+            margin-bottom: 20px;
+            border: 1px solid #ccc;
+            border-radius: 5px;
+            box-sizing: border-box;
+        }
+        input[type="file"] {
+            background-color: #f8f9fa;
+        }
+        input[type="submit"] {
+            background-color: #007bff;
+            color: #fff;
+            border: none;
+            padding: 12px 20px;
+            border-radius: 5px;
+            cursor: pointer;
+            width: 100%;
+            font-size: 16px;
+        }
+        input[type="submit"]:hover {
+            background-color: #0056b3;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1><img src="static/logo.jpg" alt="Logo" style="width: 50px; vertical-align: middle;"><i> BILLING HUBGLOBE</i></h1>
+        <form method="post" enctype="multipart/form-data">
+            <label for="invoice_date">Enter the Invoice date:</label>
+            <input type="date" id="invoice_date" name="invoice_date" required>
+            
+            <label for="excel1">Upload Customer Detail Excel:</label>
+            <input type="file" id="excel1" name="excel1" required>
+            
+            <label for="excel2">Upload latest Traffic Excel:</label>
+            <input type="file" id="excel2" name="excel2" required>
+            
+            <label for="address_type">Select Address Type:</label>
+            <select id="address_type" name="address_type" required>
+                <option value="Malaysia">Malaysia</option>
+                <option value="USA">USA</option>
+            </select>
 
-            body {
-                font-family: 'Roboto', sans-serif;
-                background-color: #f0f2f5;
-                color: #333;
-                margin: 0;
-                display: flex;
-                justify-content: center;
-                align-items: center;
-                height: 100vh;
-            }
-            .container {
-                background: white;
-                padding: 30px;
-                box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
-                border-radius: 10px;
-                width: 100%;
-                max-width: 600px;
-                text-align: center;
-            }
-            .header {
-                display: flex;
-                align-items: center;
-                justify-content: center;
-                margin-bottom: 20px;
-            }
-            .header img {
-                width: 50px;
-                margin-right: 15px;
-            }
-            .header h1 {
-                font-size: 28px;
-                margin: 0;
-                color: #007BFF;
-            }
-            form {
-                margin-top: 20px;
-            }
-            table {
-                margin: 0 auto;
-                font-size: 16px;
-                width: 100%;
-            }
-            td {
-                padding: 10px;
-                text-align: left;
-            }
-            input[type="submit"] {
-                background-color: #007BFF;
-                color: white;
-                border: none;
-                padding: 10px 20px;
-                font-size: 16px;
-                cursor: pointer;
-                border-radius: 5px;
-                transition: background-color 0.3s ease;
-            }
-            input[type="submit"]:hover {
-                background-color: #0056b3;
-            }
-            input[type="date"], input[type="file"] {
-                padding: 10px;
-                font-size: 16px;
-                border: 1px solid #ccc;
-                border-radius: 5px;
-                width: calc(100% - 22px);
-                margin: 5px 0 20px 0;
-                background-color: #e6f7ff;
-            }
-            .input-container {
-                margin-bottom: 20px;
-                text-align: left;
-            }
-            .input-container label {
-                display: block;
-                margin-bottom: 8px;
-                font-weight: bold;
-                font-size: 16px;
-            }
-            .custom-file-input {
-                position: relative;
-                display: inline-block;
-                width: calc(100% - 22px);
-                margin: 5px 0 20px 0;
-            }
-            .custom-file-input input[type="file"] {
-                position: absolute;
-                opacity: 0;
-                width: 100%;
-                height: 100%;
-                cursor: pointer;
-            }
-            .custom-file-input label {
-                background-color: #007BFF;
-                color: white;
-                border: none;
-                padding: 10px 20px;
-                font-size: 16px;
-                cursor: pointer;
-                border-radius: 5px;
-                transition: background-color 0.3s ease;
-            }
-
-            .custom-file-input label:hover {
-                background-color: #0056b3;
-            }
-        </style>
-    </head>
-    <body>
-        <div class="container">
-            <div class="header">
-                <img src="static/logo.jpg" alt="Logo">
-                <h1>BILLING HUBGLOBE</h1>
-            </div>
-            <form method="post" enctype="multipart/form-data">
-                <div class="input-container">
-                    <label for="invoice_date"><strong>Enter the Invoice date:</strong></label>
-                    <input type="date" name="invoice_date" id="invoice_date" required>
-                </div>
-                <div class="input-container custom-file-input">
-                    <label for="excel1" id="label-excel1"><strong>Upload Customer Detail Excel:</strong></label>
-                    <input type="file" name="excel1" id="excel1" required onchange="updateFileName('excel1')">
-                </div>
-                <div class="input-container custom-file-input">
-                    <label for="excel2" id="label-excel2"><strong>Upload latest Traffic Excel:</strong></label>
-                    <input type="file" name="excel2" id="excel2" required onchange="updateFileName('excel2')">
-                </div>
-                <input type="submit" value="Upload">
-            </form>
-        </div>
-        <script>
-            function updateFileName(inputId) {
-                const input = document.getElementById(inputId);
-                const label = document.getElementById('label-' + inputId);
-                const fileName = input.files[0].name;
-                label.innerHTML = `<strong>${fileName}</strong>`;
-            }
-        </script>
-    </body>
-    </html>
+            <input type="submit" value="Submit">
+        </form>
+    </div>
+</body>
+</html>
     '''
 
 @app.route('/download/<filename>', methods=['GET'])
