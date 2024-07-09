@@ -7,34 +7,10 @@ import os
 
 app = Flask(__name__)
 
-def log_invoice_details(address_type, invoice_number, account_id, total_amount, beginTime, endTime, invoice_date, total_mou=None):
-    filename = f'billing_log_{address_type.lower()}.xlsx'
-    
-    new_data = {
-        'Invoice Number': [invoice_number],
-        'Invoice Date': [invoice_date],
-        'Begin Time': [beginTime],
-        'End Time': [endTime],
-        'Account ID': [account_id],
-        'Total Amount': [total_amount]
-    }
-
-    if address_type == 'Malaysia':
-        new_data['Total MOU'] = [total_mou]
-
-    new_df = pd.DataFrame(new_data)
-
-    if os.path.exists(filename):
-        existing_df = pd.read_excel(filename)
-        updated_df = pd.concat([existing_df, new_df], ignore_index=True)
-    else:
-        updated_df = new_df
-
-    updated_df.to_excel(filename, index=False)
+LOG_FILENAME = 'log.xlsx'
 
 def generate_invoice(invoice_date, due_date, account_id, items, beginTime, endTime, billing_address, address_type):
     total_amount = int(round(sum(item['amount'] for item in items)))
-    invoice_number = f"HGS-{billing_address['code']}-{invoice_date.strftime('%Y%m%d')}"
 
     if address_type == 'Malaysia':
         total_mou = int(round(sum(item['mou'] for item in items)))
@@ -52,7 +28,6 @@ def generate_invoice(invoice_date, due_date, account_id, items, beginTime, endTi
             'logo_url': url_for('static', filename='logo.jpg', _external=True)
         }
     else:
-        total_mou = None
         template = 'invoice_template_usa.html'
         context = {
             'invoice_date': invoice_date,
@@ -68,18 +43,36 @@ def generate_invoice(invoice_date, due_date, account_id, items, beginTime, endTi
 
     rendered_html = render_template(template, **context)
     pdf = pdfkit.from_string(rendered_html, False)
-
-    log_invoice_details(address_type, invoice_number, account_id, total_amount, beginTime, endTime, invoice_date, total_mou)
-
     return BytesIO(pdf)
+
+def load_existing_logs(log_filename):
+    if os.path.exists(log_filename):
+        return pd.read_excel(log_filename, sheet_name=None)
+    return {'Malaysia': pd.DataFrame(columns=['Account ID', 'Begin Time', 'End Time', 'Date Produced', 'Total Charges', 'Rate']),
+            'USA': pd.DataFrame(columns=['Account ID', 'Begin Time', 'End Time', 'Date Produced', 'Total Charges', 'Rate'])}
+
+def save_log_data(log_filename, log_data):
+    with pd.ExcelWriter(log_filename) as writer:
+        for address_type, data in log_data.items():
+            df_log = pd.DataFrame(data)
+            df_log.to_excel(writer, sheet_name=address_type, index=False)
+
+def is_duplicate_entry(log_data, account_id, begin_time, end_time, invoice_date, rate_string):
+    for entry in log_data:
+        if (entry['Account ID'] == account_id and
+            entry['Begin Time'] == begin_time.strftime('%Y-%m-%d') and
+            # entry['Total Charges'] == rate_string and
+            entry['Invoice Date'] == invoice_date.strftime('%Y-%m-%d') and
+            entry['End Time'] == end_time.strftime('%Y-%m-%d')):
+            return True
+    return False
 
 @app.route('/', methods=['GET', 'POST'])
 def upload_file():
     if request.method == 'POST':
         invoice_date_str = request.form['invoice_date']
         invoice_date = datetime.strptime(invoice_date_str, '%Y-%m-%d')
-        address_type = request.form['address_type']
-        
+
         excel1 = request.files['excel1']
         excel2 = request.files['excel2']
 
@@ -99,10 +92,14 @@ def upload_file():
             billing_addresses[account_id] = {
                 'name': row['Company Name'],
                 'address': row['Company Address'],
-                'code': row['invoice account']
+                'code': row['invoice account'],
+                'BU': row['BU']
             }
 
         invoices = []
+        existing_logs = load_existing_logs(LOG_FILENAME)
+        log_data = {'Malaysia': existing_logs.get('Malaysia').to_dict('records'), 'USA': existing_logs.get('USA').to_dict('records')}
+        
         df2['Begin time'] = pd.to_datetime(df2['Begin time'])
         df2['End time'] = pd.to_datetime(df2['End time'])
 
@@ -114,7 +111,8 @@ def upload_file():
             
             items = []
             billing_address = billing_addresses[account_id]
-            
+            address_type = billing_address['BU']  # Get address type from the customer file
+
             date_diff = (endTime - beginTime).days
             due_date = invoice_date + timedelta(days=15 if date_diff > 10 else 7)
             
@@ -122,7 +120,7 @@ def upload_file():
                 if address_type == 'Malaysia':
                     mou = row['Total duration'] / 60
                     mou = round(mou, 2)
-                    rate_string = row['Total charges']
+                    rate_string = row['Call charges']
                     if isinstance(rate_string, str):
                         rate_string = rate_string.replace(",", "")
                     rate = float(rate_string) / mou
@@ -136,7 +134,7 @@ def upload_file():
                         'amount': round(float(rate_string), 2)
                     }
                 if address_type == 'USA':
-                    rate_string = row['Total charges']
+                    rate_string = row['Call charges']
                     if isinstance(rate_string, str):
                         rate_string = rate_string.replace(",", "")
                     item = {
@@ -146,7 +144,23 @@ def upload_file():
                 items.append(item)
             invoice_buffer = generate_invoice(invoice_date, due_date, account_id, items, beginTime, endTime, billing_address, address_type)
             invoices.append((f"{account_id}-{beginTime.strftime('%d-%b-%y')}_to_{endTime.strftime('%d-%b-%y')}.pdf", invoice_buffer))
+
+            # Log data for each group
+            if not is_duplicate_entry(log_data[address_type], account_id, beginTime, endTime, invoice_date, rate_string):
+                log_entry = {
+                    'Account ID': account_id,
+                    'Begin Time': beginTime.strftime('%Y-%m-%d'),
+                    'End Time': endTime.strftime('%Y-%m-%d'),
+                    'Invoice Date': invoice_date.strftime('%Y-%m-%d'),
+                    'Date Produced': datetime.now().strftime('%Y-%m-%d'),
+                    'Total Charges': rate_string,
+                    'MOU': mou if address_type == 'Malaysia' else 'N/A'
+                }
+                log_data[address_type].append(log_entry)
         
+        # Save log data to Excel file
+        save_log_data(LOG_FILENAME, log_data)
+
         response_html = "<h1>Invoices Generated:</h1><ul>"
         for filename, buffer in invoices:
             with open(os.path.join('invoices', filename), 'wb') as f:
@@ -159,6 +173,8 @@ def upload_file():
             for account_id in missing_account_ids:
                 response_html += f"<li>{account_id}</li>"
             response_html += "</ul>"
+
+        response_html += f'<h2>Log File:</h2><ul><li><a href="/download/{LOG_FILENAME}" target="_blank">{LOG_FILENAME}</a></li></ul>'
 
         return response_html
 
@@ -235,12 +251,6 @@ def upload_file():
             
             <label for="excel2">Upload latest Traffic Excel:</label>
             <input type="file" id="excel2" name="excel2" required>
-            
-            <label for="address_type">Select Address Type:</label>
-            <select id="address_type" name="address_type" required>
-                <option value="Malaysia">Malaysia</option>
-                <option value="USA">USA</option>
-            </select>
 
             <input type="submit" value="Submit">
         </form>
