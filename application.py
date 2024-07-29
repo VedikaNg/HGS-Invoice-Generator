@@ -61,7 +61,6 @@ def is_duplicate_entry(log_data, account_id, begin_time, end_time, invoice_date,
     for entry in log_data:
         if (entry['Account ID'] == account_id and
             entry['Begin Time'] == begin_time.strftime('%Y-%m-%d') and
-            # entry['Total Charges'] == rate_string and
             entry['Invoice Date'] == invoice_date.strftime('%Y-%m-%d') and
             entry['End Time'] == end_time.strftime('%Y-%m-%d')):
             return True
@@ -80,15 +79,15 @@ def upload_file():
         df2 = pd.read_excel(excel2)
 
         billing_addresses = {}
-        missing_account_ids = [] 
-        missing_company_names = [] 
-        
+        missing_account_ids = []
+        missing_company_names = []
+
         for _, row in df1.iterrows():
             account_id = row['account_id']
             if pd.isnull(row['Company Name']):
                 missing_company_names.append(account_id)
                 continue
-            
+
             billing_addresses[account_id] = {
                 'name': row['Company Name'],
                 'address': row['Company Address'],
@@ -99,7 +98,7 @@ def upload_file():
         invoices = []
         existing_logs = load_existing_logs(LOG_FILENAME)
         log_data = {'Malaysia': existing_logs.get('Malaysia').to_dict('records'), 'USA': existing_logs.get('USA').to_dict('records')}
-        
+
         df2['Begin time'] = pd.to_datetime(df2['Begin time'])
         df2['End time'] = pd.to_datetime(df2['End time'])
 
@@ -108,14 +107,14 @@ def upload_file():
             if account_id not in billing_addresses:
                 missing_account_ids.append(account_id)
                 continue
-            
+
             items = []
             billing_address = billing_addresses[account_id]
-            address_type = billing_address['BU']  # Get address type from the customer file
+            address_type = billing_address['BU']
 
             date_diff = (endTime - beginTime).days
             due_date = invoice_date + timedelta(days=15 if date_diff > 10 else 7)
-            
+
             for _, row in group.iterrows():
                 if address_type == 'Malaysia':
                     mou = row['Total duration'] / 60
@@ -125,7 +124,7 @@ def upload_file():
                         rate_string = rate_string.replace(",", "")
                     rate = float(rate_string) / mou
                     rate = format(rate, '.4f')
-                
+
                     item = {
                         'area_name': row['Area name'],
                         'mou': mou,
@@ -145,7 +144,6 @@ def upload_file():
             invoice_buffer = generate_invoice(invoice_date, due_date, account_id, items, beginTime, endTime, billing_address, address_type)
             invoices.append((f"{account_id}-{beginTime.strftime('%d-%b-%y')}_to_{endTime.strftime('%d-%b-%y')}.pdf", invoice_buffer))
 
-            # Log data for each group
             if not is_duplicate_entry(log_data[address_type], account_id, beginTime, endTime, invoice_date, rate_string):
                 log_entry = {
                     'Account ID': account_id,
@@ -157,15 +155,14 @@ def upload_file():
                     'MOU': mou if address_type == 'Malaysia' else 'N/A'
                 }
                 log_data[address_type].append(log_entry)
-        
-        # Save log data to Excel file
+
         save_log_data(LOG_FILENAME, log_data)
 
         response_html = "<h1>Invoices Generated:</h1><ul>"
         for filename, buffer in invoices:
             with open(os.path.join('invoices', filename), 'wb') as f:
                 f.write(buffer.getbuffer())
-            response_html += f'<li><a href="/download/{filename}" target="_blank">{filename}</a></li>'
+            response_html += f'<li><a href="/download/{filename}" target="_blank">{filename}</a> - <a href="/download/{filename}" target="_blank" onclick="printPDF(\'/download/{filename}\')">Print</a></li>'
         response_html += "</ul>"
 
         if missing_account_ids:
@@ -175,6 +172,17 @@ def upload_file():
             response_html += "</ul>"
 
         response_html += f'<h2>Log File:</h2><ul><li><a href="/download/{LOG_FILENAME}" target="_blank">{LOG_FILENAME}</a></li></ul>'
+
+        response_html += '''
+        <script>
+        function printPDF(url) {
+            const win = window.open(url, '_blank');
+            win.onload = function() {
+                win.print();
+            };
+        }
+        </script>
+        '''
 
         return response_html
 
@@ -259,13 +267,9 @@ def upload_file():
 </html>
     '''
 
-@app.route('/download/<filename>', methods=['GET'])
+@app.route('/download/<filename>')
 def download_file(filename):
-    file_path = os.path.join('invoices', filename)
-    if os.path.exists(file_path):
-        return send_file(file_path, as_attachment=True, download_name=filename)
-    else:
-        return "File not found", 404
+    return send_file(os.path.join('invoices', filename), as_attachment=True)
 
 if __name__ == '__main__':
     if not os.path.exists('invoices'):
